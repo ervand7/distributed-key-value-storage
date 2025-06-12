@@ -1,0 +1,29 @@
+version: "3.9"
+services:
+  node1:
+    build: .
+    hostname: node1
+    environment:
+      - NODE_ID=node1
+      - NODE_ADDR=node1:8080
+      - PEERS=node2:8080,node3:8080
+    ports:
+      - "8081:8080"
+  node2:
+    build: .
+    hostname: node2
+    environment:
+      - NODE_ID=node2
+      - NODE_ADDR=node2:8080
+      - PEERS=node1:8080,node3:8080
+    ports:
+      - "8082:8080"
+  node3:
+    build: .
+    hostname: node3
+    environment:
+      - NODE_ID=node3
+      - NODE_ADDR=node3:8080
+      - PEERS=node1:8080,node2:8080
+    ports:
+      - "8083:8080"
