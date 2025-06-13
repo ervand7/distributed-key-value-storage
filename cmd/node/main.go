@@ -13,6 +13,10 @@ import (
 	"distributed-key-value-storage/internal/store"
 )
 
+const (
+	ssTablesDir string = "/data"
+)
+
 func main() {
 	id := envOr("NODE_ID", "node1")
 	addr := envOr("NODE_ADDR", "localhost:8080")
@@ -22,10 +26,15 @@ func main() {
 		peers = strings.Split(peersEnv, ",")
 	}
 
+	err := os.MkdirAll(ssTablesDir, 0o755)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	n := node.NewNode(
 		id,
 		addr,
-		store.NewStore("/data", 1000),
+		store.NewStore(ssTablesDir),
 		consistenthash.NewRing(100),
 		gossip.NewState(id, addr),
 	)

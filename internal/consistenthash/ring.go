@@ -36,22 +36,39 @@ func (r *Ring) Add(nodeID string) {
 }
 
 // Get returns up to 'num' distinct node IDs responsible for 'key'.
+// It uses consistent hashing to find the correct virtual nodes.
 func (r *Ring) Get(key string, num int) []string {
+	// If the ring is empty or the requested number of nodes is incorrect - return Nil
 	if len(r.keys) == 0 || num <= 0 {
 		return nil
 	}
+
+	// calculate the hash from the key (xxhash - very fast and high-quality hash)
 	h := xxhash.Sum64String(key)
+
+	// look for an index of the nearest (along the ring) hash > = h
 	idx := r.search(h)
+
+	// the resulting list of IDs of real nodes (not virtual)
 	res := make([]string, 0, num)
+
+	// the map for tracking node id already added (so as not to add duplicates)
 	visited := make(map[string]struct{})
+
+	// the cycle until the right amount of unique node id has been scored
 	for len(res) < num {
+		// get node id corresponding to the hash in the IDX position
 		nodeID := r.hashMap[r.keys[idx]]
 		if _, seen := visited[nodeID]; !seen {
 			res = append(res, nodeID)
 			visited[nodeID] = struct{}{}
 		}
+
+		// go to the next idx in the ring (in a circle)
 		idx = (idx + 1) % len(r.keys)
 	}
+
+	// return the list of node ids responsible for the key
 	return res
 }
 
@@ -61,5 +78,6 @@ func (r *Ring) search(h uint64) int {
 	if idx == len(r.keys) {
 		return 0
 	}
+
 	return idx
 }

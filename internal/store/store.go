@@ -11,6 +11,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -18,128 +19,153 @@ import (
 	"time"
 )
 
-type Version struct {
-	Counter uint64 `json:"counter"`
-	NodeID  string `json:"node_id"`
-}
+const (
+	flushThreshold = 1000
+)
 
-// Compare returns +1 if v > o, -1 if v < o, 0 if equal.
-func (v Version) Compare(o Version) int {
-	if v.Counter > o.Counter {
-		return 1
-	} else if v.Counter < o.Counter {
-		return -1
+type (
+	Store struct {
+		mu             sync.RWMutex
+		memtable       map[string]Entry
+		dir            string
+		flushThreshold int
 	}
-	if v.NodeID > o.NodeID {
-		return 1
-	} else if v.NodeID < o.NodeID {
-		return -1
+
+	Entry struct {
+		Key     string  `json:"key"`
+		Value   []byte  `json:"value"`
+		Version Version `json:"version"`
 	}
-	return 0
-}
-
-type Entry struct {
-	Key   string  `json:"key"`
-	Value []byte  `json:"value"`
-	Ver   Version `json:"version"`
-}
-
-type Store struct {
-	mu             sync.RWMutex
-	memtable       map[string]Entry
-	dir            string
-	flushThreshold int
-}
+)
 
 // NewStore returns a Store that writes SSTables into dir.
-func NewStore(dir string, flushThreshold int) *Store {
-	_ = os.MkdirAll(dir, 0o755)
+func NewStore(ssTablesDir string) *Store {
 	return &Store{
 		memtable:       make(map[string]Entry),
-		dir:            dir,
+		dir:            ssTablesDir,
 		flushThreshold: flushThreshold,
 	}
 }
 
 // Put updates a key if the version beats the existing one.
 // Returns true if stored.
-func (s *Store) Put(e Entry) bool {
+func (s *Store) Put(entry Entry) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if cur, ok := s.memtable[e.Key]; ok {
-		if e.Ver.Compare(cur.Ver) <= 0 {
+
+	if e, ok := s.memtable[entry.Key]; ok {
+		if entry.Version.Compare(e.Version) <= 0 {
 			return false
 		}
 	}
-	s.memtable[e.Key] = e
+
+	s.memtable[entry.Key] = entry
 	if len(s.memtable) >= s.flushThreshold {
-		_ = s.flush()
+		err := s.writeToSSTable()
+		if err != nil {
+			log.Println(err)
+		}
 	}
+
 	return true
 }
 
 // Get retrieves from memtable then SSTables (newest‑first).
 func (s *Store) Get(key string) (Entry, bool) {
 	s.mu.RLock()
+
 	if e, ok := s.memtable[key]; ok {
 		s.mu.RUnlock()
 		return e, true
 	}
 	s.mu.RUnlock()
 
-	// search latest SSTables first
+	// Get a list of SSTable files (*.sst) from the storage directory
 	files, _ := filepath.Glob(filepath.Join(s.dir, "*.sst"))
+
+	// Sort the file names in reverse order (newest files first)
+	// so we check the latest flushed SSTables before older ones
 	sort.Sort(sort.Reverse(sort.StringSlice(files)))
-	for _, f := range files {
-		if e, ok := readFromSSTable(f, key); ok {
-			return e, true
+
+	// Iterate through SSTables one by one
+	for _, file := range files {
+		// Try to find the key in this SSTable
+		if e, ok := s.readFromSSTable(file, key); ok {
+			return e, true // Return immediately if found
 		}
 	}
+
+	// If the key wasn't found in either memtable or any SSTable
 	return Entry{}, false
 }
 
-// flush writes memtable to a new SSTable then clears it.
-func (s *Store) flush() error {
+// writes the current memtable to a new SSTable file on disk, then clears the memtable.
+func (s *Store) writeToSSTable() error {
+	// If memtable is empty, no need to flush.
 	if len(s.memtable) == 0 {
 		return nil
 	}
-	// capture snapshot
+
+	// Create a snapshot (copy) of all current entries to avoid mutating the original
+	// map while writing.
 	snap := make([]Entry, 0, len(s.memtable))
 	for _, e := range s.memtable {
 		snap = append(snap, e)
 	}
+
+	// Sort the snapshot entries by key so the SSTable is ordered (helpful for
+	// future optimizations).
 	sort.Slice(snap, func(i, j int) bool { return snap[i].Key < snap[j].Key })
+
+	// Generate a unique filename based on current timestamp (nanoseconds).
 	ts := time.Now().UnixNano()
 	path := filepath.Join(s.dir, fmt.Sprintf("%d.sst", ts))
+
+	// Create the SSTable file on disk.
 	file, err := os.Create(path)
 	if err != nil {
 		return err
 	}
+	defer func() { _ = file.Close() }()
+
+	// Create a buffered writer for efficient disk I/O.
 	w := bufio.NewWriter(file)
-	enc := json.NewEncoder(w)
+
+	// Create a JSON encoder to serialize entries line-by-line.
+	encoder := json.NewEncoder(w)
+
+	// Write each entry in the snapshot as a separate JSON line.
 	for _, e := range snap {
-		_ = enc.Encode(e)
+		_ = encoder.Encode(e) // intentionally ignoring error for simplicity
 	}
-	_ = w.Flush()
-	_ = file.Close()
-	// clear memtable
+
+	// Flush buffered data to the file.
+	err = w.Flush()
+	if err != nil {
+		return err
+	}
+
+	// Clear the memtable after a successful flush
 	s.memtable = make(map[string]Entry)
+
 	return nil
 }
 
 // readFromSSTable scans file line by line until key found.
-func readFromSSTable(path string, key string) (Entry, bool) {
+func (s *Store) readFromSSTable(path string, key string) (Entry, bool) {
 	file, err := os.Open(path)
 	if err != nil {
 		return Entry{}, false
 	}
-	defer file.Close()
-	dec := json.NewDecoder(file)
+	defer func() { _ = file.Close() }()
+
+	decoder := json.NewDecoder(file)
 	var e Entry
-	for dec.More() {
-		if err := dec.Decode(&e); err == nil && e.Key == key {
+	for decoder.More() {
+		if err := decoder.Decode(&e); err == nil && e.Key == key {
 			return e, true
 		}
 	}
+
 	return Entry{}, false
 }
