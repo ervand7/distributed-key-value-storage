@@ -179,9 +179,9 @@ func (n *Node) handleKvGet(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Ask another node for the value
-		if e, ok := n.sendInternalGet(dest, key); ok {
-			if acks == 0 || e.Ver.Compare(winner.Ver) > 0 {
-				winner = e
+		if entry, ok := n.sendInternalGet(dest, key); ok {
+			if acks == 0 || entry.Ver.Compare(winner.Ver) > 0 {
+				winner = entry
 			}
 			acks++
 		}
