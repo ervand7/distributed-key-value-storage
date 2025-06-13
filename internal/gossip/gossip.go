@@ -7,6 +7,7 @@ package gossip
 import (
 	"bytes"
 	"encoding/json"
+	"log"
 	"net/http"
 	"sync"
 	"time"
@@ -18,9 +19,9 @@ type State struct {
 	mu    sync.RWMutex
 }
 
-func NewState(selfID, selfAddr string) *State {
+func NewState(id, addr string) *State {
 	return &State{
-		Nodes: map[string]string{selfID: selfAddr},
+		Nodes: map[string]string{id: addr},
 		TS:    time.Now().UnixNano(),
 	}
 }
@@ -39,17 +40,25 @@ func (s *State) Merge(remote *State) {
 }
 
 // Start launches a goroutine that gossips every gossipInterval.
-func Start(selfID string, st *State, peers []string, gossipInterval time.Duration) {
+func Start(nodeID string, st *State, peers []string, gossipInterval time.Duration) {
 	go func() {
 		cli := &http.Client{Timeout: 2 * time.Second}
 		for {
+			log.Printf("gossiping for nodeID %s", nodeID)
+
 			st.mu.RLock()
-			payload, _ := json.Marshal(st)
+			payload, err := json.Marshal(st)
+			if err != nil {
+				log.Println(err)
+				continue
+			}
 			st.mu.RUnlock()
+
 			for _, p := range peers {
 				url := "http://" + p + "/gossip"
 				_, _ = cli.Post(url, "application/json", bytes.NewReader(payload))
 			}
+
 			time.Sleep(gossipInterval)
 		}
 	}()

@@ -1,8 +1,5 @@
 # Distributed Key‑Value Store
 
-This project is a **minimal but complete** demonstration of the concepts covered in the *Distributed Systems* chapter
-on Dynamo‑style storage engines.
-
 ## Features Implemented
 
 | Concept | Where / How |

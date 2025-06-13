@@ -46,16 +46,16 @@ type Entry struct {
 
 type Store struct {
 	mu             sync.RWMutex
-	mem            map[string]Entry
+	memtable       map[string]Entry
 	dir            string
 	flushThreshold int
 }
 
 // NewStore returns a Store that writes SSTables into dir.
 func NewStore(dir string, flushThreshold int) *Store {
-	os.MkdirAll(dir, 0o755)
+	_ = os.MkdirAll(dir, 0o755)
 	return &Store{
-		mem:            make(map[string]Entry),
+		memtable:       make(map[string]Entry),
 		dir:            dir,
 		flushThreshold: flushThreshold,
 	}
@@ -66,13 +66,13 @@ func NewStore(dir string, flushThreshold int) *Store {
 func (s *Store) Put(e Entry) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if cur, ok := s.mem[e.Key]; ok {
+	if cur, ok := s.memtable[e.Key]; ok {
 		if e.Ver.Compare(cur.Ver) <= 0 {
 			return false
 		}
 	}
-	s.mem[e.Key] = e
-	if len(s.mem) >= s.flushThreshold {
+	s.memtable[e.Key] = e
+	if len(s.memtable) >= s.flushThreshold {
 		_ = s.flush()
 	}
 	return true
@@ -81,7 +81,7 @@ func (s *Store) Put(e Entry) bool {
 // Get retrieves from memtable then SSTables (newest‑first).
 func (s *Store) Get(key string) (Entry, bool) {
 	s.mu.RLock()
-	if e, ok := s.mem[key]; ok {
+	if e, ok := s.memtable[key]; ok {
 		s.mu.RUnlock()
 		return e, true
 	}
@@ -100,12 +100,12 @@ func (s *Store) Get(key string) (Entry, bool) {
 
 // flush writes memtable to a new SSTable then clears it.
 func (s *Store) flush() error {
-	if len(s.mem) == 0 {
+	if len(s.memtable) == 0 {
 		return nil
 	}
 	// capture snapshot
-	snap := make([]Entry, 0, len(s.mem))
-	for _, e := range s.mem {
+	snap := make([]Entry, 0, len(s.memtable))
+	for _, e := range s.memtable {
 		snap = append(snap, e)
 	}
 	sort.Slice(snap, func(i, j int) bool { return snap[i].Key < snap[j].Key })
@@ -120,10 +120,10 @@ func (s *Store) flush() error {
 	for _, e := range snap {
 		_ = enc.Encode(e)
 	}
-	w.Flush()
-	file.Close()
-	// clear mem
-	s.mem = make(map[string]Entry)
+	_ = w.Flush()
+	_ = file.Close()
+	// clear memtable
+	s.memtable = make(map[string]Entry)
 	return nil
 }
 
