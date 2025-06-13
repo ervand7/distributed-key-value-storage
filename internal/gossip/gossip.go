@@ -26,40 +26,40 @@ func NewState(id, addr string) *State {
 	}
 }
 
-// Merge integrates remote state if newer.
-func (s *State) Merge(remote *State) {
+// Merge integrates `other` state if newer.
+func (s *State) Merge(other *State) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if remote.TS <= s.TS {
+
+	if other.TS <= s.TS {
 		return
 	}
-	for k, v := range remote.Nodes {
+
+	for k, v := range other.Nodes {
 		s.Nodes[k] = v
 	}
-	s.TS = remote.TS
+	s.TS = other.TS
 }
 
 // Start launches a goroutine that gossips every gossipInterval.
 func Start(nodeID string, st *State, peers []string, gossipInterval time.Duration) {
-	go func() {
-		cli := &http.Client{Timeout: 2 * time.Second}
-		for {
-			log.Printf("gossiping for nodeID %s", nodeID)
+	cli := &http.Client{Timeout: 2 * time.Second}
+	for {
+		log.Printf("gossiping for nodeID %s", nodeID)
 
-			st.mu.RLock()
-			payload, err := json.Marshal(st)
-			if err != nil {
-				log.Println(err)
-				continue
-			}
-			st.mu.RUnlock()
-
-			for _, p := range peers {
-				url := "http://" + p + "/gossip"
-				_, _ = cli.Post(url, "application/json", bytes.NewReader(payload))
-			}
-
-			time.Sleep(gossipInterval)
+		st.mu.RLock()
+		payload, err := json.Marshal(st)
+		if err != nil {
+			log.Println(err)
+			continue
 		}
-	}()
+		st.mu.RUnlock()
+
+		for _, p := range peers {
+			url := "http://" + p + "/gossip"
+			_, _ = cli.Post(url, "application/json", bytes.NewReader(payload))
+		}
+
+		time.Sleep(gossipInterval)
+	}
 }

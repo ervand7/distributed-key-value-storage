@@ -102,6 +102,7 @@ func (n *Node) HandleGossip(_ http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		log.Println(err)
 	}
+
 	n.State.Merge(&st)
 }
 

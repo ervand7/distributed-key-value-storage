@@ -47,7 +47,7 @@ func main() {
 	}
 
 	// start gossip
-	gossip.Start(id, n.State, peers, 2*time.Second)
+	go gossip.Start(id, n.State, peers, 2*time.Second)
 
 	// HTTP handlers
 	mux := http.NewServeMux()
